@@ -11,18 +11,25 @@ from gurobipy import GRB
 from .utils import is_leaf
 
 
-def check_single_node_feasibility(tree_set: List[nx.Graph], V: Set[int]) -> bool:
+def check_single_node_feasibility(tree_set: List[nx.Graph]) -> bool:
     """
-    检查单节点可行性：任意一个节点至少在一棵树上为叶子节点
+    检查单节点可行性：树集合中的每个节点至少在一棵树上为叶子节点
+    
+    假设：树集合中的每棵树都包含相同的存活节点集合
     
     Args:
-        tree_set: 树集合
-        V: 所有节点集合
+        tree_set: 树集合（每棵树都包含相同的存活节点）
     
     Returns:
         bool: 如果满足单节点可行性返回True，否则返回False
     """
-    for node in V:
+    if not tree_set:
+        return True
+    
+    # 获取第一棵树的所有节点（所有树应该包含相同的节点集合）
+    nodes_in_trees = set(tree_set[0].nodes())
+    
+    for node in nodes_in_trees:
         # 检查该节点是否在至少一棵树中是叶节点
         is_leaf_in_any_tree = False
         for T in tree_set:
@@ -206,7 +213,7 @@ def phase1_tree_selection(
             print(f"已检查 {idx}/{len(all_combinations)} 个组合...")
         
         # 步骤1：检查单节点可行性
-        if not check_single_node_feasibility(tree_set, V):
+        if not check_single_node_feasibility(tree_set):
             continue
         
         # 步骤2：贪心算法检查n节点故障
@@ -343,7 +350,7 @@ def phase1_tree_selection_with_pruning(
             print(f"已检查 {idx}/{len(combinations_to_check)} 个组合...")
         
         # 步骤1：检查单节点可行性
-        if not check_single_node_feasibility(tree_set, V):
+        if not check_single_node_feasibility(tree_set):
             continue
         
         # 步骤2：贪心算法检查n节点故障
@@ -411,6 +418,36 @@ def phase1_tree_selection_with_pruning(
     return [combo['tree_set'] for combo in selected]
 
 
+def _is_tree_alive_after_fault(T: nx.Graph, S: Set[int]) -> bool:
+    """
+    判断树T在故障集合S下是否存活
+    
+    存活条件：故障集合S中的所有节点都为树T的叶子节点
+    
+    Args:
+        T: 树
+        S: 故障节点集合
+    
+    Returns:
+        bool: 如果树存活返回True，否则返回False
+    """
+    V_T = set(T.nodes())
+    
+    # 如果故障集合为空，树自动存活
+    if len(S) == 0:
+        return True
+    
+    # 计算树中包含的故障节点
+    fault_nodes_in_T = V_T & S
+    
+    # 检查所有在树中的故障节点是否都是叶节点
+    for node in fault_nodes_in_T:
+        if not is_leaf(T, node):
+            return False
+    
+    return True
+
+
 def phase2_bandwidth_optimization(
     tree_set: List[nx.Graph],
     G: nx.Graph,
@@ -462,52 +499,54 @@ def phase2_bandwidth_optimization(
     all_S = list(itertools.combinations(V, n_fault))
     print(f"需要考虑的故障集合数量: {len(all_S)}")
     
-    # 计算每个树中每个节点是否为非叶节点（p_{t,i}）
-    p = {}
-    for t in range(k):
-        T = tree_set[t]
-        for i in V:
-            if i in T.nodes():
-                p[t, i] = 1 if not is_leaf(T, i) else 0
-            else:
-                # 节点不在树中，视为叶节点（不会破坏树）
-                p[t, i] = 0
+    # 预计算每个树在每种故障场景下的存活状态
+    # survives[t, idx] = 1 当且仅当树t在故障集合all_S[idx]下存活
+    survives = {}
+    
+    # 检查每个故障场景下是否有至少一棵树存活
+    # 如果某个故障场景下所有树都不存活，则该树组合不可行，直接返回
+    for idx, S in enumerate(all_S):
+        S_set = set(S)
+        any_survive = False
+        
+        for t in range(k):
+            T = tree_set[t]
+            alive = _is_tree_alive_after_fault(T, S_set)
+            survives[t, idx] = 1 if alive else 0
+            
+            if alive:
+                any_survive = True
+        
+        # 如果该故障场景下所有树都不存活，返回0（优化结果必然为0）
+        if not any_survive:
+            print(f"\n故障集合 {S} 下所有树都不存活，该树组合不可行")
+            print(f"返回最小剩余带宽: 0.0")
+            # 创建一个空模型返回
+            empty_model = gp.Model("Infeasible_Tree_Set")
+            return empty_model, 0.0
     
     # 剩余带宽约束
     for idx, S in enumerate(all_S):
         if idx % 1000 == 0 and len(all_S) > 1000:
             print(f"处理故障集合 {idx}/{len(all_S)}...")
         
-        # r_S 表示所有满足条件的树的带宽之和
+        # r_S 表示所有在故障集合S下存活的树的带宽之和
         r_S = model.addVar(lb=0.0, name=f"r_S_{S}")
         
         # 存储每个树t对r_S的贡献
         y_list = []
         for t in range(k):
-            # z_{t,S} = 1 当且仅当S中所有节点在树t中都是叶节点（prod(1-p_{t,i})=1）
-            z = model.addVar(vtype=GRB.BINARY, name=f"z_{t}_{S}")
-            
-            # 约束：如果S中任一节点在树t中为非叶节点，则z=0
-            for i in S:
-                model.addConstr(z <= 1 - p[t, i], name=f"z_ub_{t}_{S}_{i}")
-            
-            # 约束：如果S中所有节点在树t中都为叶节点，则z=1
-            # 使用线性化：z >= sum(1-p) - (|S|-1)
-            model.addConstr(z >= sum(1 - p[t, i] for i in S) - (len(S) - 1),
-                          name=f"z_lb_{t}_{S}")
-            
-            # y_{t,S} = w_t * z_{t,S}（树t对r_S的贡献）
-            y = model.addVar(lb=0.0, name=f"y_{t}_{S}")
-            
-            # 线性化乘积约束：y <= w, y <= M*z, y >= w + M*(z-1)
-            M_w = 1000.0  # 大M值，可以根据实际情况调整
-            model.addConstr(y <= M_w * z, name=f"y_ub1_{t}_{S}")
-            model.addConstr(y <= w[t], name=f"y_ub2_{t}_{S}")
-            model.addConstr(y >= w[t] + M_w * (z - 1), name=f"y_lb_{t}_{S}")
+            # 如果树t在这个故障场景下不存活，则贡献为0
+            if survives[t, idx] == 0:
+                y = model.addVar(lb=0.0, ub=0.0, name=f"y_{t}_{S}")
+            else:
+                # 树t存活，贡献为w[t]
+                y = model.addVar(lb=0.0, name=f"y_{t}_{S}")
+                model.addConstr(y == w[t], name=f"y_eq_{t}_{S}")
             
             y_list.append(y)
         
-        # r_S 等于所有y的总和（即满足条件的树的带宽之和）
+        # r_S 等于所有y的总和（即存活的树的带宽之和）
         model.addConstr(r_S == gp.quicksum(y_list), name=f"r_S_sum_{S}")
         
         # r_min 是所有r_S的最小值
@@ -660,7 +699,7 @@ def evaluate_tree_combinations(tree_combinations: List[List[nx.Graph]], V: Set[i
     
     for idx, tree_set in enumerate(tree_combinations):
         # 检查单节点可行性
-        single_node_feasible = check_single_node_feasibility(tree_set, V)
+        single_node_feasible = check_single_node_feasibility(tree_set)
         
         # 检查n节点故障可行性
         n_node_feasible = not greedy_fault_check(tree_set, V, n_fault)
