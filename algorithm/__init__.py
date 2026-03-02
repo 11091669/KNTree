@@ -31,7 +31,14 @@ from .tree_selection import (
     check_single_node_feasibility,
     greedy_fault_check
 )
-from .utils import is_leaf
+from .utils import (
+    is_leaf,
+    save_model_to_json,
+    load_model_from_json,
+    parse_tree_from_json,
+    get_tree_edges,
+    get_tree_bandwidth
+)
 
 __version__ = "1.0.0"
 __all__ = [
@@ -64,9 +71,14 @@ __all__ = [
     
     # Utility functions
     'is_leaf',
+    'save_model_to_json',
+    'load_model_from_json',
+    'parse_tree_from_json',
+    'get_tree_edges',
+    'get_tree_bandwidth',
     'check_single_node_feasibility',
     'greedy_fault_check',
-    
+
     # Parser function
     'parse_model_info_file',
 ]

@@ -3,12 +3,18 @@ import networkx as nx
 import numpy as np
 import queue
 import functools
+import os
+
+# 获取算法模块所在目录的父目录
+ALGORITHM_DIR = os.path.dirname(os.path.abspath(__file__))
+SOLVE_DIR = os.path.dirname(ALGORITHM_DIR)
 
 TOPO_FILES = {
-    'Equinix': '../topo/topo-with-comments/Equinix/',
-    'G_Scale': '../topo/topo-with-comments/G_Scale/',
-    'IDN': '../topo/topo-with-comments/IDN/',
-    'TestTopo': '../topo/topo-with-comments/TestTopo/',
+    'Equinix': os.path.join(SOLVE_DIR, 'topo/topo-with-comments/Equinix/'),
+    'G_Scale': os.path.join(SOLVE_DIR, 'topo/topo-with-comments/G_Scale/'),
+    'IDN': os.path.join(SOLVE_DIR, 'topo/topo-with-comments/IDN/'),
+    'TestTopo': os.path.join(SOLVE_DIR, 'topo/topo-with-comments/TestTopo/'),
+    'Expander': os.path.join(SOLVE_DIR, 'topo/topo-with-comments/Expander/'),
 }
 
 def createGraph(Edge, Delay = 0):  # 绘制网络图
